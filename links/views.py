@@ -19,7 +19,7 @@ def generate_short_code(length=6):
             return code
 
 
-
+from common.authentication import CsrfExemptSessionAuthentication
 
 class LinkViewSet(viewsets.ModelViewSet):
     queryset = Link.objects.all().order_by('-created_at')
@@ -28,7 +28,8 @@ class LinkViewSet(viewsets.ModelViewSet):
 
     def destroy(self, request, *args, **kwargs):
         user = getattr(request, 'user', None)
-        pass
+        if not user or not user.is_authenticated:
+            return Response({'error': 'Forbidden: please login to delete'}, status=status.HTTP_403_FORBIDDEN)
         return super().destroy(request, *args, **kwargs)
 
     def create(self, request, *args, **kwargs):

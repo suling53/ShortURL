@@ -17,14 +17,14 @@ Including another URLconf
 from django.contrib import admin
 from django.urls import path, include
 from gateway.views import RedirectView
-
+from common.auth_views import LoginView, LogoutView, MeView
 
 urlpatterns = [
     path("admin/", admin.site.urls),
     # Auth
-    
-    
-    
+    path('api/auth/login', LoginView.as_view()),
+    path('api/auth/logout', LogoutView.as_view()),
+    path('api/auth/me', MeView.as_view()),
     # APIs
     path('api/', include('links.urls')),
     path('api/', include('tracking.urls')),
