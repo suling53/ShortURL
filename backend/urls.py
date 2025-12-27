@@ -29,5 +29,6 @@ urlpatterns = [
     path('api/', include('links.urls')),
     path('api/', include('tracking.urls')),
     # Short redirect
+    path('api/<str:short_code>/', RedirectView.as_view(), name='redirect'),
     path('<str:short_code>/', RedirectView.as_view(), name='redirect'),
 ]

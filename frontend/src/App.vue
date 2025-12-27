@@ -1,0 +1,137 @@
+<script setup>
+import { ref, computed } from 'vue'
+import { useRoute, useRouter, RouterLink, RouterView } from 'vue-router'
+import { Moon, Sunny, DataAnalysis, HomeFilled } from '@element-plus/icons-vue'
+import { ElMessage } from 'element-plus'
+import { login, logout, me } from './api'
+
+const isDark = ref(false)
+function toggleTheme() {
+  isDark.value = !isDark.value
+  const root = document.documentElement
+  if (isDark.value) root.classList.add('dark')
+  else root.classList.remove('dark')
+}
+
+// 登录状态
+const authed = ref(false)
+const username = ref('')
+const loginDialog = ref(false)
+const form = ref({ username: '', password: '' })
+
+async function refreshAuth(){
+  try{
+    const res = await me()
+    authed.value = !!res?.data?.authenticated
+    username.value = res?.data?.username || ''
+  }catch{
+    authed.value = false; username.value=''
+  }
+}
+
+async function doLogin(){
+  if(!form.value.username || !form.value.password){ ElMessage.warning('请输入账号和密码'); return }
+  try{
+    await login(form.value.username, form.value.password)
+    ElMessage.success('登录成功')
+    loginDialog.value = false
+    form.value = { username:'', password:'' }
+    await refreshAuth()
+    window.dispatchEvent(new CustomEvent('auth-changed', { detail:{ authenticated: authed.value } }))
+  }catch(e){
+    ElMessage.error(e?.response?.data?.error || '登录失败')
+  }
+}
+
+async function doLogout(){
+  try{
+    await logout()
+    ElMessage.success('已退出')
+    await refreshAuth()
+    window.dispatchEvent(new CustomEvent('auth-changed', { detail:{ authenticated: authed.value } }))
+  }catch{
+    // 忽略
+  }
+}
+
+refreshAuth()
+</script>
+
+<template>
+  <div class="app-wrap">
+    <div class="bg-gradient" aria-hidden="true" />
+
+    <header class="app-header" v-motion :initial="{y:-8, opacity:0}" :enter="{y:0, opacity:1}">
+      <div class="brand">
+        <img src="/vite.svg" alt="logo" />
+        <span>ShortURL</span>
+      </div>
+      <nav class="nav">
+        <RouterLink to="/" class="link"><el-icon><HomeFilled /></el-icon><span>首页</span></RouterLink>
+        <RouterLink to="/analytics" class="link"><el-icon><DataAnalysis /></el-icon><span>分析</span></RouterLink>
+        <el-button circle @click="toggleTheme" class="theme-btn">
+          <el-icon v-if="!isDark"><Moon /></el-icon>
+          <el-icon v-else><Sunny /></el-icon>
+        </el-button>
+        <el-divider direction="vertical" />
+        <template v-if="authed">
+          <span style="margin-right:8px">👋 {{ username }}</span>
+          <el-button size="small" @click="doLogout">退出</el-button>
+        </template>
+        <template v-else>
+          <el-button size="small" type="primary" @click="loginDialog=true">登录</el-button>
+        </template>
+      </nav>
+    </header>
+
+    <main class="app-main">
+      <RouterView v-slot="{ Component }">
+        <transition name="fade-slide" mode="out-in">
+          <component :is="Component" />
+        </transition>
+      </RouterView>
+    </main>
+
+    <footer class="app-footer">
+      <span>Made with Vue 3 · Element Plus · ECharts</span>
+    </footer>
+
+    <!-- 登录对话框 -->
+    <el-dialog v-model="loginDialog" title="登录" width="420px" append-to-body :align-center="true">
+      <el-form label-position="top">
+        <el-form-item label="用户名">
+          <el-input v-model="form.username" placeholder="请输入用户名" />
+        </el-form-item>
+        <el-form-item label="密码">
+          <el-input v-model="form.password" type="password" placeholder="请输入密码" show-password />
+        </el-form-item>
+      </el-form>
+      <template #footer>
+        <el-button @click="loginDialog=false">取消</el-button>
+        <el-button type="primary" @click="doLogin">登录</el-button>
+      </template>
+    </el-dialog>
+  </div>
+</template>
+
+<style>
+:root { --bg1: #0ea5e9; --bg2: #8b5cf6; }
+html, body, #app { height: 100%; }
+.app-wrap { min-height: 100%; position: relative; }
+.bg-gradient { position: fixed; inset: -20% -10% auto -10%; height: 380px; filter: blur(70px); background: radial-gradient(50% 50% at 50% 50%, var(--bg1) 0%, rgba(14,165,233,0.2) 60%, transparent 100%), radial-gradient(50% 50% at 60% 40%, var(--bg2) 0%, rgba(139,92,246,0.2) 60%, transparent 100%); pointer-events: none; opacity: .7; }
+.app-header { position: sticky; top: 0; z-index: 10; display: flex; align-items: center; justify-content: space-between; padding: 12px 16px; backdrop-filter: blur(10px); background: color-mix(in oklab, white 70%, transparent); border-bottom: 1px solid rgba(0,0,0,.06); }
+.dark .app-header { background: color-mix(in oklab, #111827 60%, transparent); border-color: rgba(255,255,255,.06); }
+.brand { display: flex; align-items: center; gap: 10px; font-weight: 700; font-size: 18px; }
+.brand img { width: 24px; height: 24px; }
+.nav { display: flex; align-items: center; gap: 10px; }
+.nav .link { display: inline-flex; align-items: center; gap: 6px; padding: 8px 10px; border-radius: 8px; color: var(--el-text-color-primary); }
+.nav .link.router-link-active { background: color-mix(in oklab, var(--el-color-primary) 16%, transparent); color: var(--el-color-primary); }
+.theme-btn { margin-left: 6px; }
+.app-main { max-width: 1200px; margin: 16px auto; padding: 0 16px; }
+.app-footer { text-align: center; padding: 24px 0 40px; color: var(--el-text-color-secondary); }
+
+/* page transition */
+.fade-slide-enter-active, .fade-slide-leave-active { transition: all .22s ease; }
+.fade-slide-enter-from { opacity: 0; transform: translateY(6px); }
+.fade-slide-leave-to { opacity: 0; transform: translateY(-6px); }
+</style>
