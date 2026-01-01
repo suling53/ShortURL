@@ -1,5 +1,5 @@
 <script setup>
-import { ref, onMounted, watch } from 'vue'
+import { ref, onMounted, watch, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import VChart from 'vue-echarts'
 import * as echarts from 'echarts/core'
@@ -12,34 +12,48 @@ import { getAnalytics, getCodeOptions } from '../api'
 
 echarts.use([LineChart, BarChart, TitleComponent, TooltipComponent, LegendComponent, GridComponent, DatasetComponent, CanvasRenderer])
 
-// 短码远程搜索
-const code = ref('')
-const codeOptions = ref([])
-const loadingCodes = ref(false)
-const fetchCodes = async (q = '') => {
-  loadingCodes.value = true
-  try {
-    const res = await getCodeOptions(q)
-    codeOptions.value = res.data.options || []
-  } catch (e) {
-    console.error(e); ElMessage.error('加载短码失败')
-  } finally { loadingCodes.value = false }
-}
+const selectedOriginal = ref('')
+const selectedCode = ref('')
 
-// 范围与图表控制
-const range = ref('24h') // 24h | 7d | 30d | custom
-const custom = ref({ start: '', end: '' }) // ISO
-const chartType = ref('line') // line | bar
+const allOptions = ref([])
+const loadingMain = ref(false)
 
-// 数据缓存（导出用）
+const originalOptions = computed(() => {
+  const map = new Map()
+  for (const o of allOptions.value || []) {
+    if (!o.original_url) continue
+    if (!map.has(o.original_url)) {
+      map.set(o.original_url, { value: o.original_url, label: o.original_url })
+    }
+  }
+  return Array.from(map.values())
+})
+
+const codeOptionsForSelectedOriginal = computed(() => {
+  if (!selectedOriginal.value) return []
+  return (allOptions.value || [])
+    .filter(o => o.original_url === selectedOriginal.value)
+    .map(o => ({
+      ...o,
+      value: o.value,
+      label: `${o.title || '(未命名)'} · ${o.value}`,
+    }))
+})
+
+const range = ref('24h')
+const custom = ref({ start: '', end: '' })
+const chartType = ref('line')
+
 const hourlyData = ref([])
 const dailyData = ref([])
-const siblingsData = ref([]) // 同一原链接下，不同短链排行
+const siblingsData = ref([])
+const siblingsDailyData = ref([])
+const siblingsHourlyData = ref([])
 
-// 图表配置
 const hourlyOpt = ref({})
 const dailyOpt = ref({})
 const siblingsOpt = ref({})
+
 const loading = ref(false)
 
 function toISO(dt) {
@@ -48,12 +62,59 @@ function toISO(dt) {
   try { return new Date(dt).toISOString() } catch { return '' }
 }
 
+function normalizeHourLabel(s) {
+  if (!s) return ''
+  if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}$/.test(s)) {
+    return s.replace(' ', 'T') + ':00'
+  }
+  if (/^\d{4}-\d{2}-\d{2}\s\d{2}:\d{2}:\d{2}$/.test(s)) {
+    return s.replace(' ', 'T')
+  }
+  return s
+}
+
+function formatHourTick(s) {
+  const v = normalizeHourLabel(s)
+  try {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return s
+    const mm = String(d.getMonth() + 1).padStart(2, '0')
+    const dd = String(d.getDate()).padStart(2, '0')
+    const hh = String(d.getHours()).padStart(2, '0')
+    return `${mm}-${dd} ${hh}`
+  } catch {
+    return s
+  }
+}
+
+function formatHourTooltip(s) {
+  const v = normalizeHourLabel(s)
+  try {
+    const d = new Date(v)
+    if (Number.isNaN(d.getTime())) return s
+    const yyyy = d.getFullYear()
+    const MM = String(d.getMonth() + 1).padStart(2, '0')
+    const DD = String(d.getDate()).padStart(2, '0')
+    const HH = String(d.getHours()).padStart(2, '0')
+    return `${yyyy}-${MM}-${DD} ${HH}:00`
+  } catch {
+    return s
+  }
+}
+
+function formatDateTick(s) {
+  if (!s) return ''
+  const m = String(s).match(/^(\d{4})-(\d{2})-(\d{2})$/)
+  if (!m) return String(s)
+  return `${m[2]}-${m[3]}`
+}
+
 async function refresh() {
-  if (!code.value) { ElMessage.warning('请先选择短码'); return }
+  if (!selectedCode.value) { return }
   const params = {}
   if (range.value === 'custom') {
     if (!custom.value.start || !custom.value.end) {
-      ElMessage.warning('请选择自定义起止时间');
+      ElMessage.warning('请选择自定义起止时间')
       return
     }
     params.range = 'custom'
@@ -65,32 +126,44 @@ async function refresh() {
 
   loading.value = true
   try {
-    const res = await getAnalytics(code.value, params)
+    const res = await getAnalytics(selectedCode.value, params)
     const hourly = res.data.hourly || []
     const daily = res.data.daily || []
     const siblings = res.data.siblings_top || []
+    const siblingsDaily = res.data.siblings_daily || []
+    const siblingsHourly = res.data.siblings_hourly || []
 
     hourlyData.value = hourly
     dailyData.value = daily
     siblingsData.value = siblings
+    siblingsDailyData.value = siblingsDaily
+    siblingsHourlyData.value = siblingsHourly
 
     hourlyOpt.value = buildSeriesOption(
       (chartType.value === 'line') ? 'line' : 'bar',
       '最近分时趋势',
       hourly.map(i => i.hour),
-      hourly.map(i => Number(i.clicks || 0))
+      hourly.map(i => Number(i.clicks || 0)),
+      {
+        xTickFormatter: formatHourTick,
+        tooltipLabelFormatter: (axisValue) => formatHourTooltip(axisValue),
+      }
     )
 
     dailyOpt.value = buildSeriesOption(
       (chartType.value === 'line') ? 'line' : 'bar',
       '按天历史趋势',
       daily.map(i => i.date),
-      daily.map(i => Number(i.clicks || 0))
+      daily.map(i => Number(i.clicks || 0)),
+      {
+        xTickFormatter: formatDateTick,
+        tooltipLabelFormatter: (axisValue) => String(axisValue || ''),
+      }
     )
 
     siblingsOpt.value = buildBarOption(
       '同原链接不同短链（按标题）Top',
-      siblings.map(i => i.title),
+      siblings.map(i => `${i.title || '(未命名)'} · ${i.short_code}`),
       siblings.map(i => Number(i.clicks || 0))
     )
   } catch (e) {
@@ -99,15 +172,35 @@ async function refresh() {
   } finally { loading.value = false }
 }
 
-function buildSeriesOption(type, title, x, y) {
+function buildSeriesOption(type, title, x, y, opts = {}) {
   return {
     backgroundColor: 'transparent',
     title: { text: title, left: 'center' },
-    tooltip: { trigger: 'axis' },
+    tooltip: {
+      trigger: 'axis',
+      formatter: (params) => {
+        if (!params || !params.length) return ''
+        const p0 = params[0]
+        const label = opts.tooltipLabelFormatter
+          ? opts.tooltipLabelFormatter(p0?.axisValue)
+          : String(p0?.axisValue || '')
+        const lines = [label]
+        for (const p of params) {
+          lines.push(`${p.marker || ''}${p.seriesName || ''}：${p.data}`)
+        }
+        return lines.join('<br/>')
+      },
+    },
     grid: { left: 40, right: 20, top: 50, bottom: 40 },
-    xAxis: { type: 'category', data: x, boundaryGap: type === 'bar' },
-    yAxis: { type: 'value' },
+    xAxis: {
+      type: 'category',
+      data: x,
+      boundaryGap: type === 'bar',
+      axisLabel: opts.xTickFormatter ? { formatter: opts.xTickFormatter } : undefined,
+    },
+    yAxis: { type: 'value', minInterval: 1 },
     series: [{
+      name: '点击量',
       type,
       data: y,
       smooth: type === 'line',
@@ -119,18 +212,42 @@ function buildSeriesOption(type, title, x, y) {
 }
 
 function buildBarOption(title, labels, values) {
+  const maxVal = values && values.length ? Math.max(...values) : 0
   return {
     backgroundColor: 'transparent',
     title: { text: title, left: 'center' },
     tooltip: { trigger: 'axis' },
     grid: { left: 120, right: 20, top: 50, bottom: 40 },
-    xAxis: { type: 'value' },
+    xAxis: {
+      type: 'value',
+      min: 0,
+      max: maxVal < 1 ? 1 : undefined,
+      minInterval: 1,
+    },
     yAxis: { type: 'category', data: labels },
-    series: [{ type: 'bar', data: values, itemStyle: { color: '#67c23a' } }]
+    series: [{
+      type: 'bar',
+      data: values,
+      barMaxWidth: 40,
+      itemStyle: {
+        borderRadius: [4, 4, 4, 4],
+        color: {
+          type: 'linear',
+          x: 0,
+          y: 0,
+          x2: 1,
+          y2: 0,
+          colorStops: [
+            { offset: 0, color: '#67c23a' },
+            { offset: 1, color: '#a0e75a' },
+          ],
+        },
+      },
+      label: { show: true, position: 'right', formatter: '{c}' },
+    }],
   }
 }
 
-// 导出 CSV / Excel
 function downloadBlob(filename, mime, content) {
   const blob = new Blob([content], { type: mime })
   const url = URL.createObjectURL(blob)
@@ -156,33 +273,105 @@ function toCSV(headers, rows) {
 }
 
 function exportCSV() {
-  if (!code.value) return ElMessage.warning('请选择短码')
-  const id = code.value
+  if (!selectedOriginal.value) return ElMessage.warning('请先选择原始链接')
+  const orig = encodeURIComponent(selectedOriginal.value)
   const rng = range.value
-  const csvH = toCSV(['hour','clicks'], hourlyData.value.map(i => [i.hour, i.clicks]))
-  downloadBlob(`analytics_${id}_${rng}_hourly.csv`, 'text/csv;charset=utf-8', csvH)
-  const csvD = toCSV(['date','clicks'], dailyData.value.map(i => [i.date, i.clicks]))
-  downloadBlob(`analytics_${id}_${rng}_daily.csv`, 'text/csv;charset=utf-8', csvD)
-  const csvS = toCSV(['title','short_code','clicks'], siblingsData.value.map(i => [i.title, i.short_code, i.clicks]))
-  downloadBlob(`analytics_${id}_${rng}_siblings.csv`, 'text/csv;charset=utf-8', csvS)
+
+  const csvS = toCSV(
+    ['original_url', 'title', 'short_code', 'clicks'],
+    siblingsData.value.map(i => [selectedOriginal.value, i.title, i.short_code, i.clicks])
+  )
+  downloadBlob(`analytics_${orig}_${rng}_siblings_all.csv`, 'text/csv;charset=utf-8', csvS)
 }
 
 function exportExcel() {
-  if (!code.value) return ElMessage.warning('请选择短码')
-  const id = code.value
+  if (!selectedOriginal.value) return ElMessage.warning('请先选择原始链接')
+  if (!siblingsHourlyData.value?.length && !siblingsDailyData.value?.length) {
+    return ElMessage.warning('请先选择一个短码并点击“刷新”加载统计数据')
+  }
+
+  const orig = selectedOriginal.value
   const rng = range.value
+
+  const dateMap = new Map()
+  for (const r of siblingsHourlyData.value || []) {
+    if (!r.date) continue
+    if (!dateMap.has(r.date)) dateMap.set(r.date, { byCode: new Map(), titleByCode: new Map() })
+    const bucket = dateMap.get(r.date)
+
+    if (!bucket.byCode.has(r.short_code)) bucket.byCode.set(r.short_code, new Array(24).fill(0))
+    if (!bucket.titleByCode.has(r.short_code)) bucket.titleByCode.set(r.short_code, r.title || r.short_code)
+
+    const h = Number(r.hour)
+    if (Number.isFinite(h) && h >= 0 && h <= 23) {
+      bucket.byCode.get(r.short_code)[h] = Number(r.clicks || 0)
+    }
+  }
+
+  const dailyClicks = new Map()
+  for (const r of siblingsDailyData.value || []) {
+    if (!r.date || !r.short_code) continue
+    dailyClicks.set(`${r.date}|${r.short_code}`, Number(r.clicks || 0))
+    if (!dateMap.has(r.date)) dateMap.set(r.date, { byCode: new Map(), titleByCode: new Map() })
+    const bucket = dateMap.get(r.date)
+    if (!bucket.byCode.has(r.short_code)) bucket.byCode.set(r.short_code, new Array(24).fill(0))
+    if (!bucket.titleByCode.has(r.short_code)) bucket.titleByCode.set(r.short_code, r.title || r.short_code)
+  }
+
   const wb = XLSX.utils.book_new()
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(hourlyData.value), 'Hourly')
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(dailyData.value), 'Daily')
-  XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(siblingsData.value), 'SiblingsTop')
-  XLSX.writeFile(wb, `analytics_${id}_${rng}.xlsx`)
+  const dates = Array.from(dateMap.keys()).sort()
+
+  // 强制列顺序：标题、短码、点击量、0..23
+  const hourHeaders = Array.from({ length: 24 }, (_, i) => String(i))
+  const header = ['标题', '短码', '点击量', ...hourHeaders]
+
+  for (const date of dates) {
+    const bucket = dateMap.get(date)
+    const rows = []
+
+    for (const [shortCode, hoursArr] of bucket.byCode.entries()) {
+      const title = bucket.titleByCode.get(shortCode) || shortCode
+
+      const row = {
+        标题: title,
+        短码: shortCode,
+        点击量: dailyClicks.get(`${date}|${shortCode}`) ?? hoursArr.reduce((a, b) => a + b, 0),
+      }
+      for (let h = 0; h < 24; h++) {
+        row[String(h)] = hoursArr[h]
+      }
+      rows.push(row)
+    }
+
+    rows.sort((a, b) => (Number(b['点击量'] || 0) - Number(a['点击量'] || 0)))
+
+    const sheet = XLSX.utils.json_to_sheet(rows, { header })
+    XLSX.utils.book_append_sheet(wb, sheet, date)
+  }
+
+  XLSX.writeFile(wb, `analytics_${orig}_${rng}.xlsx`)
 }
 
-onMounted(async () => {
-  await fetchCodes('')
+watch(selectedOriginal, () => {
+  selectedCode.value = ''
 })
 
-watch([chartType, range], () => refresh())
+watch([chartType, range], () => {
+  if (selectedCode.value) refresh()
+})
+
+onMounted(async () => {
+  try {
+    loadingMain.value = true
+    const res = await getCodeOptions('')
+    allOptions.value = res.data.options || []
+  } catch (e) {
+    console.error(e)
+    ElMessage.error('加载短码列表失败')
+  } finally {
+    loadingMain.value = false
+  }
+})
 </script>
 
 <template>
@@ -192,35 +381,54 @@ watch([chartType, range], () => refresh())
         <div class="head">
           <span>数据分析</span>
           <div class="tools">
-            <el-select v-model="code" filterable remote reserve-keyword placeholder="请输入短码/标题搜索"
-                       :remote-method="fetchCodes" :loading="loadingCodes" style="min-width:320px">
-              <el-option v-for="o in codeOptions" :key="o.value" :label="o.label" :value="o.value" />
-            </el-select>
+            <div class="row2">
+              <el-select
+                v-model="selectedOriginal"
+                filterable
+                clearable
+                placeholder="请选择或搜索原始链接"
+                :loading="loadingMain"
+                style="min-width:260px"
+              >
+                <el-option v-for="o in originalOptions" :key="o.value" :label="o.label" :value="o.value" />
+              </el-select>
+            </div>
 
-            <el-select v-model="range" style="width:140px">
-              <el-option label="近24小时" value="24h" />
-              <el-option label="近7天" value="7d" />
-              <el-option label="近30天" value="30d" />
-              <el-option label="自定义" value="custom" />
-            </el-select>
-            <template v-if="range==='custom'">
-              <el-date-picker v-model="custom.start" type="datetime" placeholder="开始时间" style="width:180px" />
-              <el-date-picker v-model="custom.end" type="datetime" placeholder="结束时间" style="width:180px" />
-            </template>
+            <div class="row2">
+              <el-select
+                v-model="selectedCode"
+                :disabled="!selectedOriginal"
+                placeholder="请选择该原始链接下的短码（标题 · 短码）"
+                style="min-width:260px"
+              >
+                <el-option v-for="o in codeOptionsForSelectedOriginal" :key="o.value" :label="o.label" :value="o.value" />
+              </el-select>
 
-            <el-select v-model="chartType" style="width:120px">
-              <el-option label="折线" value="line" />
-              <el-option label="柱状" value="bar" />
-            </el-select>
+              <el-select v-model="range" style="width:140px">
+                <el-option label="近24小时" value="24h" />
+                <el-option label="近7天" value="7d" />
+                <el-option label="近30天" value="30d" />
+                <el-option label="自定义" value="custom" />
+              </el-select>
+              <template v-if="range==='custom'">
+                <el-date-picker v-model="custom.start" type="datetime" placeholder="开始时间" style="width:180px" />
+                <el-date-picker v-model="custom.end" type="datetime" placeholder="结束时间" style="width:180px" />
+              </template>
 
-            <el-button type="primary" @click="refresh">刷新</el-button>
-            <el-button @click="exportCSV" :disabled="!code">导出CSV</el-button>
-            <el-button @click="exportExcel" :disabled="!code">导出Excel</el-button>
+              <el-select v-model="chartType" style="width:120px">
+                <el-option label="折线" value="line" />
+                <el-option label="柱状" value="bar" />
+              </el-select>
+
+              <el-button type="primary" @click="refresh" :disabled="!selectedCode">刷新</el-button>
+              <el-button @click="exportCSV" :disabled="!selectedOriginal">导出CSV</el-button>
+              <el-button @click="exportExcel" :disabled="!selectedOriginal">导出Excel</el-button>
+            </div>
           </div>
         </div>
       </template>
 
-      <div v-if="!code" class="empty">请选择短码以查看趋势</div>
+      <div v-if="!selectedCode" class="empty">请选择原始链接和其下的短码以查看趋势</div>
       <div v-else>
         <el-row :gutter="16">
           <el-col :xs="24" :md="12">
@@ -254,6 +462,8 @@ watch([chartType, range], () => refresh())
 .page { padding: 12px; }
 .glass { backdrop-filter: blur(6px); }
 .head { display:flex; align-items:center; justify-content:space-between; gap:8px; }
-.tools { display:flex; align-items:center; gap:8px; flex-wrap: wrap; }
+.head > span { white-space: nowrap; }
+.tools { display:flex; flex-direction:column; gap:6px; width:100%; }
+.row2 { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
 .empty { text-align:center; color: var(--el-text-color-secondary); padding: 12px 0; }
 </style>

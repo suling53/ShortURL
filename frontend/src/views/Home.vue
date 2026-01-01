@@ -1,7 +1,7 @@
 <script setup>
-import { ref, onMounted, computed } from 'vue'
+import { ref, onMounted, computed, onBeforeMount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
-import { listLinks, createLink, deleteLink, verifyPassword, createBatchLinks, me } from '../api'
+import { listLinks, createLink, deleteLink, verifyPassword, createBatchLinks } from '../api'
 import { Lock } from '@element-plus/icons-vue'
 
 // 表单
@@ -16,10 +16,6 @@ const form = ref({
 const rules = {
   original_url: [
     { required: true, message: '请输入原始链接', trigger: 'blur' },
-    { validator: (_, v, cb) => {
-        try { const u = new URL(v); (u.protocol === 'http:'||u.protocol==='https:') ? cb() : cb(new Error('必须以 http/https 开头')) }
-        catch { cb(new Error('请输入合法链接')) }
-      }, trigger: 'blur' }
   ],
 }
 
@@ -39,7 +35,7 @@ async function fetchData(p=1){
     page.value = p
   }catch(e){
     console.error(e)
-    ElMessage.error('获取列表失败')
+    ElMessage.error(e?.response?.data?.error || '获取列表失败')
   }finally{ loading.value=false }
 }
 
@@ -58,13 +54,13 @@ async function onSubmit(){
     fetchData(1)
   }catch(e){
     console.error(e)
-    ElMessage.error(e?.response?.data?.detail || '创建失败')
+    ElMessage.error(e?.response?.data?.error || '创建失败')
   }
 }
 
 async function onDelete(row){
   try{
-    await ElMessageBox.confirm(`确定删除短链 ${row.short_code} ?`, '确认', { type:'warning' })
+    await ElMessageBox.confirm(`确定删除短链 ${row.short_code} ?`, '确认删除', { type:'warning', confirmButtonText:'确定', cancelButtonText:'取消' })
     await deleteLink(row.short_code)
     ElMessage.success('删除成功')
     fetchData(page.value)
@@ -136,7 +132,6 @@ async function confirmPwd(){
 
 function copyLink(text){
   if(!text){ ElMessage.warning('无效链接'); return }
-  // 优先使用异步剪贴板API
   if (navigator.clipboard && window.isSecureContext !== false) {
     navigator.clipboard.writeText(text)
       .then(()=> ElMessage.success('已复制到剪贴板'))
@@ -167,17 +162,13 @@ const batchDialog = ref(false)
 const batchRef = ref()
 const batch = ref({
   original_url: '',
-  titles_text: '', // 多个平台名称，每行一个
+  titles_text: '',
   password: '',
   expires_at: ''
 })
 const batchRules = {
   original_url: [
     { required: true, message: '请输入原始链接', trigger: 'blur' },
-    { validator: (_, v, cb) => {
-        try { const u = new URL(v); (u.protocol === 'http:'||u.protocol==='https:') ? cb() : cb(new Error('必须以 http/https 开头')) }
-        catch { cb(new Error('请输入合法链接')) }
-      }, trigger: 'blur' }
   ],
   titles_text: [ { required: true, message: '请输入平台名称（每行一个）', trigger: 'blur' } ]
 }
@@ -200,7 +191,6 @@ async function onBatchSubmit(){
     const cnt = res?.data?.count || titles.length
     ElMessage.success(`批量创建成功，共 ${cnt} 条`)
     batchDialog.value = false
-    // 重置
     batch.value = { original_url:'', titles_text:'', password:'', expires_at:'' }
     fetchData(1)
   }catch(e){
@@ -209,7 +199,25 @@ async function onBatchSubmit(){
   }
 }
 
-onMounted(()=>fetchData(1))
+// 监听登录状态变化，自动刷新列表
+function onAuthChanged(e){
+  const authed = !!e?.detail?.authenticated
+  if(authed){
+    fetchData(1)
+  }else{
+    rows.value = []
+    total.value = 0
+  }
+}
+
+onMounted(()=>{
+  fetchData(1)
+  window.addEventListener('auth-changed', onAuthChanged)
+})
+
+onBeforeMount(()=>{
+  window.removeEventListener('auth-changed', onAuthChanged)
+})
 </script>
 
 <template>
@@ -224,7 +232,7 @@ onMounted(()=>fetchData(1))
           </template>
           <el-form ref="formRef" :model="form" :rules="rules" label-position="top">
             <el-form-item label="原始地址" prop="original_url">
-              <el-input v-model="form.original_url" placeholder="https://example.com/very/long/url" clearable />
+              <el-input v-model="form.original_url" placeholder="例如 example.com/xxx（未写协议时将自动补全 https://）" clearable />
             </el-form-item>
             <el-form-item label="名称/标题（用来区分平台）">
               <el-input v-model="form.title" placeholder="如 Weibo / WeChat / Douyin" clearable />
@@ -273,7 +281,6 @@ onMounted(()=>fetchData(1))
         </div>
       </template>
 
-      <!-- 分组展开/收起：原始地址在前，子表格显示各平台（标题）对应短链 -->
       <el-collapse v-model="activePanels" accordion>
         <el-collapse-item v-for="g in grouped" :key="g.original_url" :name="g.original_url">
           <template #title>
@@ -329,11 +336,10 @@ onMounted(()=>fetchData(1))
       </template>
     </el-dialog>
 
-    <!-- 批量创建对话框 -->
     <el-dialog v-model="batchDialog" title="批量创建多平台短链" width="520px" append-to-body :lock-scroll="true" :close-on-click-modal="false" :align-center="true">
       <el-form ref="batchRef" :model="batch" :rules="batchRules" label-position="top">
         <el-form-item label="原始地址" prop="original_url">
-          <el-input v-model="batch.original_url" placeholder="https://example.com/landing" clearable />
+          <el-input v-model="batch.original_url" placeholder="例如 example.com/landing（未写协议时将自动补全 https://）" clearable />
         </el-form-item>
         <el-form-item label="平台名称（每行一个）" prop="titles_text">
           <el-input v-model="batch.titles_text" type="textarea" :rows="6" placeholder="示例：\nWeibo\nWeChat\nDouyin" />

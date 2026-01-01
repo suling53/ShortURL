@@ -26,8 +26,8 @@ SECRET_KEY = "django-insecure-0kthy&wu_v=v3qnwl)!0%%3*8r8ckpr%(20x1s765*6j3$0_^o
 # SECURITY WARNING: don't run with debug turned on in production!
 DEBUG = True
 
-# ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
-ALLOWED_HOSTS = ["*"]
+ALLOWED_HOSTS = ["127.0.0.1", "localhost"]
+
 
 # Application definition
 
@@ -90,7 +90,7 @@ DATABASES = {
         'ENGINE': 'django.db.backends.mysql',
         'NAME': os.getenv('MYSQL_DATABASE', 'shortlink'),
         'USER': os.getenv('MYSQL_USER', 'shortlink'),
-        'PASSWORD': 'abc123', # Using the password you provided
+        'PASSWORD': 'abc123',  # Using the password you provided
         'HOST': os.getenv('MYSQL_HOST', 'localhost'),
         'PORT': os.getenv('MYSQL_PORT', '3306'),
     }
@@ -121,7 +121,8 @@ AUTH_PASSWORD_VALIDATORS = [
 
 LANGUAGE_CODE = "en-us"
 
-TIME_ZONE = "UTC"
+# 重要：项目统计/展示以中国时间为准
+TIME_ZONE = "Asia/Shanghai"
 
 USE_I18N = True
 
@@ -165,5 +166,3 @@ REST_FRAMEWORK = {
     'DEFAULT_PAGINATION_CLASS': 'rest_framework.pagination.PageNumberPagination',
     'PAGE_SIZE': 20,
 }
-
-
